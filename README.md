@@ -1,0 +1,1 @@
+escenea continumente reconociendo objetos
