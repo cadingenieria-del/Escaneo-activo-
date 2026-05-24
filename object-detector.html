@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Vision AI · Detector de Objetos</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cyan: #00f5ff;
+    --green: #39ff14;
+    --orange: #ff6b00;
+    --dark: #020d14;
+    --panel: rgba(0, 20, 35, 0.88);
+    --border: rgba(0, 245, 255, 0.25);
+    --glow: 0 0 20px rgba(0,245,255,0.4);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--dark);
+    font-family: 'Exo 2', sans-serif;
+    color: var(--cyan);
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  .logo {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.1rem;
+    letter-spacing: 3px;
+    text-shadow: var(--glow);
+  }
+  .logo span { color: var(--green); }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #333;
+    display: inline-block;
+    margin-right: 6px;
+    transition: background .3s, box-shadow .3s;
+  }
+  .status-dot.active { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .status-dot.scanning { background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: blink .6s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .status-text {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .7rem;
+    color: #7ab;
+    letter-spacing: 1px;
+  }
+
+  /* ── CAMERA AREA ── */
+  .camera-wrap {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #000;
+  }
+
+  video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  canvas#snapshot { display: none; }
+
+  /* Scan line overlay */
+  .scanline {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,245,255,0.015) 2px,
+      rgba(0,245,255,0.015) 4px
+    );
+    z-index: 2;
+  }
+
+  /* Corner brackets */
+  .corners {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .corners::before, .corners::after,
+  .corners .c3, .corners .c4 {
+    content: '';
+    position: absolute;
+    width: 28px; height: 28px;
+    border-color: var(--cyan);
+    border-style: solid;
+    box-shadow: var(--glow);
+  }
+  .corners::before  { top:12px;    left:12px;   border-width: 2px 0 0 2px; }
+  .corners::after   { top:12px;    right:12px;  border-width: 2px 2px 0 0; }
+  .corners .c3      { bottom:12px; left:12px;   border-width: 0 0 2px 2px; }
+  .corners .c4      { bottom:12px; right:12px;  border-width: 0 2px 2px 0; }
+
+  /* Sweep animation while scanning */
+  .sweep {
+    position: absolute; left:0; right:0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+    box-shadow: 0 0 12px var(--cyan);
+    top: 0;
+    opacity: 0;
+    z-index: 4;
+    pointer-events: none;
+    transition: opacity .2s;
+  }
+  .sweep.active {
+    opacity: 1;
+    animation: sweep 1.4s linear infinite;
+  }
+  @keyframes sweep {
+    0%   { top: 0%; }
+    100% { top: 100%; }
+  }
+
+  /* Labels overlay */
+  #labels-overlay {
+    position: absolute; inset: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .label-tag {
+    position: absolute;
+    background: rgba(0, 20, 35, 0.82);
+    border: 1px solid var(--cyan);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .68rem;
+    color: var(--cyan);
+    text-shadow: 0 0 6px var(--cyan);
+    box-shadow: 0 0 10px rgba(0,245,255,0.3);
+    white-space: nowrap;
+    animation: fadeInTag .35s ease;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .label-tag .conf {
+    color: var(--green);
+    font-size: .6rem;
+    margin-left: 4px;
+  }
+  @keyframes fadeInTag {
+    from { opacity: 0; transform: scale(.85); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  /* ── BOTTOM PANEL ── */
+  .bottom-panel {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 10px 16px 14px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .btn-scan {
+    flex: 1;
+    background: transparent;
+    border: 2px solid var(--cyan);
+    color: var(--cyan);
+    font-family: 'Exo 2', sans-serif;
+    font-weight: 600;
+    font-size: .85rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-shadow: var(--glow);
+    box-shadow: var(--glow);
+    transition: all .2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-scan:active { transform: scale(.97); }
+  .btn-scan.on {
+    background: rgba(57,255,20,.12);
+    border-color: var(--green);
+    color: var(--green);
+    text-shadow: 0 0 10px var(--green);
+    box-shadow: 0 0 20px rgba(57,255,20,.35);
+  }
+  .btn-scan:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
+  .btn-flip {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: #7ab;
+    font-size: 1.3rem;
+    width: 42px; height: 42px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .2s;
+  }
+  .btn-flip:active { border-color: var(--cyan); color: var(--cyan); }
+
+  .interval-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .interval-row label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .65rem;
+    color: #7ab;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  input[type=range] {
+    flex: 1;
+    accent-color: var(--cyan);
+    height: 3px;
+    cursor: pointer;
+  }
+  .interval-val {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .65rem;
+    color: var(--cyan);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  /* Result list */
+  #result-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-height: 26px;
+    max-height: 54px;
+    overflow: hidden;
+  }
+  .chip {
+    background: rgba(0,245,255,0.07);
+    border: 1px solid rgba(0,245,255,0.3);
+    border-radius: 30px;
+    padding: 2px 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .65rem;
+    color: var(--cyan);
+    animation: fadeInTag .3s ease;
+  }
+  .chip.new {
+    border-color: var(--green);
+    color: var(--green);
+    background: rgba(57,255,20,.06);
+  }
+
+  /* Error */
+  #error-msg {
+    display: none;
+    color: #ff4d4d;
+    font-size: .7rem;
+    font-family: 'Share Tech Mono', monospace;
+    margin-top: 6px;
+    text-align: center;
+  }
+
+  /* Countdown overlay */
+  #countdown {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .75rem;
+    color: rgba(0,245,255,0.5);
+    letter-spacing: 2px;
+    pointer-events: none;
+    z-index: 6;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">VISION<span>·AI</span></div>
+  <div>
+    <span class="status-dot" id="dot"></span>
+    <span class="status-text" id="status-text">INICIANDO</span>
+  </div>
+</header>
+
+<div class="camera-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="snapshot"></canvas>
+  <div class="scanline"></div>
+  <div class="corners"><span class="c3"></span><span class="c4"></span></div>
+  <div class="sweep" id="sweep"></div>
+  <div id="labels-overlay"></div>
+  <div id="countdown"></div>
+</div>
+
+<div class="bottom-panel">
+  <div class="controls">
+    <button class="btn-scan" id="btn-scan" disabled>▶ INICIAR SCAN</button>
+    <button class="btn-flip" id="btn-flip" title="Cambiar cámara">🔄</button>
+  </div>
+  <div class="interval-row">
+    <label>INTERVALO</label>
+    <input type="range" id="interval" min="2" max="10" value="4" step="1">
+    <span class="interval-val" id="interval-val">4s</span>
+  </div>
+  <div id="result-list"></div>
+  <div id="error-msg"></div>
+</div>
+
+<script>
+// ── State ──
+let stream = null;
+let facingMode = 'environment'; // back camera by default
+let scanning = false;
+let scanTimer = null;
+let countdownTimer = null;
+let nextScanIn = 0;
+let lastLabels = [];
+
+const video      = document.getElementById('video');
+const canvas     = document.getElementById('snapshot');
+const dot        = document.getElementById('dot');
+const statusTxt  = document.getElementById('status-text');
+const btnScan    = document.getElementById('btn-scan');
+const btnFlip    = document.getElementById('btn-flip');
+const sweep      = document.getElementById('sweep');
+const overlay    = document.getElementById('labels-overlay');
+const resultList = document.getElementById('result-list');
+const errorMsg   = document.getElementById('error-msg');
+const countdown  = document.getElementById('countdown');
+const intervalEl = document.getElementById('interval');
+const intervalVal= document.getElementById('interval-val');
+
+// ── Camera ──
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  setStatus('ACCEDIENDO', false, false);
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    setStatus('LISTO', true, false);
+    btnScan.disabled = false;
+    hideError();
+  } catch(e) {
+    setStatus('ERROR CAM', false, false);
+    showError('No se pudo acceder a la cámara: ' + e.message);
+  }
+}
+
+btnFlip.addEventListener('click', () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  startCamera();
+});
+
+// ── Controls ──
+intervalEl.addEventListener('input', () => {
+  intervalVal.textContent = intervalEl.value + 's';
+});
+
+btnScan.addEventListener('click', () => {
+  if (scanning) stopScan();
+  else startScan();
+});
+
+function startScan() {
+  scanning = true;
+  btnScan.textContent = '⏹ DETENER SCAN';
+  btnScan.classList.add('on');
+  setStatus('ESCANEANDO', false, true);
+  doScan();
+}
+
+function stopScan() {
+  scanning = false;
+  clearTimeout(scanTimer);
+  clearInterval(countdownTimer);
+  btnScan.textContent = '▶ INICIAR SCAN';
+  btnScan.classList.remove('on');
+  sweep.classList.remove('active');
+  countdown.style.display = 'none';
+  setStatus('LISTO', true, false);
+}
+
+// ── Scan loop ──
+async function doScan() {
+  if (!scanning) return;
+  sweep.classList.add('active');
+  setStatus('ANALIZANDO...', false, true);
+  const b64 = captureFrame();
+  try {
+    const labels = await analyzeWithClaude(b64);
+    renderLabels(labels);
+    renderChips(labels);
+    hideError();
+  } catch(e) {
+    showError(e.message);
+  }
+  sweep.classList.remove('active');
+  if (!scanning) return;
+
+  setStatus('ESCANEANDO', false, true);
+  const interval = parseInt(intervalEl.value);
+  nextScanIn = interval;
+  countdown.style.display = 'block';
+  countdown.textContent = `PRÓXIMO SCAN: ${nextScanIn}s`;
+  countdownTimer = setInterval(() => {
+    nextScanIn--;
+    if (nextScanIn <= 0) {
+      clearInterval(countdownTimer);
+      countdown.style.display = 'none';
+    } else {
+      countdown.textContent = `PRÓXIMO SCAN: ${nextScanIn}s`;
+    }
+  }, 1000);
+
+  scanTimer = setTimeout(doScan, interval * 1000);
+}
+
+// ── Capture frame ──
+function captureFrame() {
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  canvas.width  = Math.min(vw, 640);
+  canvas.height = Math.round(vh * (canvas.width / vw));
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+}
+
+// ── Claude Vision API ──
+async function analyzeWithClaude(b64) {
+  const prompt = `Eres un sistema de visión por computador. Analiza esta imagen y devuelve ÚNICAMENTE un JSON (sin markdown, sin explicaciones) con el siguiente formato:
+{
+  "objects": [
+    { "label": "nombre del objeto en español", "confidence": 0.92, "position": {"x": 0.5, "y": 0.5} }
+  ]
+}
+- "label": nombre corto del objeto (máx 3 palabras, en español)
+- "confidence": número entre 0 y 1
+- "position": coordenadas normalizadas (0-1) del centro del objeto en la imagen (x=horizontal, y=vertical)
+Detecta todos los objetos visibles relevantes. Máximo 8 objetos. Solo el JSON, nada más.`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    })
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `HTTP ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const raw = data.content?.find(c => c.type === 'text')?.text || '{}';
+  const clean = raw.replace(/```json|```/g, '').trim();
+  try {
+    const parsed = JSON.parse(clean);
+    return parsed.objects || [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Render labels on video ──
+function renderLabels(objects) {
+  overlay.innerHTML = '';
+  const rect = video.getBoundingClientRect();
+  objects.forEach(obj => {
+    const tag = document.createElement('div');
+    tag.className = 'label-tag';
+    const conf = Math.round((obj.confidence || 0.9) * 100);
+    tag.innerHTML = `${obj.label}<span class="conf">${conf}%</span>`;
+
+    const px = (obj.position?.x ?? Math.random() * 0.7 + 0.1) * rect.width;
+    const py = (obj.position?.y ?? Math.random() * 0.7 + 0.1) * rect.height;
+    tag.style.left = Math.min(px, rect.width - 170) + 'px';
+    tag.style.top  = Math.max(py - 20, 4) + 'px';
+    overlay.appendChild(tag);
+  });
+}
+
+// ── Render chips list ──
+function renderChips(objects) {
+  const newLabels = objects.map(o => o.label);
+  resultList.innerHTML = '';
+  newLabels.forEach(lbl => {
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (lastLabels.includes(lbl) ? '' : ' new');
+    chip.textContent = lbl;
+    resultList.appendChild(chip);
+  });
+  lastLabels = newLabels;
+}
+
+// ── Utils ──
+function setStatus(txt, ready, active) {
+  statusTxt.textContent = txt;
+  dot.className = 'status-dot' + (ready ? ' active' : active ? ' scanning' : '');
+}
+function showError(msg) {
+  errorMsg.textContent = '⚠ ' + msg;
+  errorMsg.style.display = 'block';
+}
+function hideError() {
+  errorMsg.style.display = 'none';
+}
+
+// ── Init ──
+startCamera();
+</script>
+</body>
+</html>
